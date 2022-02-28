@@ -1,18 +1,22 @@
 package five.ec1cff.intentforwarder
 
 import android.annotation.SuppressLint
-import android.content.ComponentName
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Binder
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.util.Log
+import android.view.WindowManager
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.*
 import de.robv.android.xposed.IXposedHookLoadPackage
-import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
-import java.lang.reflect.Field
+
+const val ATMS = "com.android.server.wm.ActivityTaskManagerService"
 
 @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
 class HookSystem: IXposedHookLoadPackage {
@@ -23,6 +27,25 @@ class HookSystem: IXposedHookLoadPackage {
             .getDeclaredMethod("currentActivityThread")
             .invoke(null)!!
             .invokeMethod("getSystemContext") as Context
+    }
+
+    val systemUIContext: Context by lazy {
+        Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentActivityThread")
+            .invoke(null)!!
+            .invokeMethod("getSystemUiContext") as Context
+    }
+
+    val windowContext: Context by lazy {
+        systemUIContext.createWindowContext(
+            WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG, null
+        )
+    }
+
+    val myHandler: Handler by lazy {
+        val thread = HandlerThread("IntentForwarder")
+        thread.start()
+        Handler(thread.looper)
     }
 
     var enabled = true
@@ -37,9 +60,9 @@ class HookSystem: IXposedHookLoadPackage {
         }
     }
 
-    private fun checkFromModule(allowRoot: Boolean = false): Boolean {
+    private fun checkFromModule(withRoot: Boolean = false): Boolean {
         val uid = Binder.getCallingUid()
-        if (allowRoot && uid == 0) return true
+        if (withRoot && uid == 0) return true
         val result = systemContext.packageManager.getPackagesForUid(uid)?.any {
             it == BuildConfig.APPLICATION_ID
         }
@@ -47,76 +70,49 @@ class HookSystem: IXposedHookLoadPackage {
         return result == true
     }
 
-    fun getRequestField(n: String) = findField("com.android.server.wm.ActivityStarter\$Request") {
-        name == n
-    }.also { it.isAccessible = true }
-
-    val intentField: Field by lazy {
-        getRequestField("intent")
+    private fun checkIntent(intent: Intent): Boolean {
+        return intent.component?.className == "five.ec1cff.wxdemo.WebBrowserActivity"
     }
 
-    val reasonField: Field by lazy {
-        getRequestField("reason")
-    }
-
-    val resultToField: Field by lazy {
-        getRequestField("resultTo")
-    }
-
-    val callingUidField: Field by lazy {
-        getRequestField("callingUid")
-    }
-
-    val callingPackageField: Field by lazy {
-        getRequestField("callingPackage")
-    }
-
-    val callingFeatureIdField: Field by lazy {
-        getRequestField("callingFeatureId")
-    }
-
-    val ignoreTargetSecurityField: Field by lazy {
-        getRequestField("ignoreTargetSecurity")
-    }
-
-    private fun handleForwardIntent(that: Any, mRequest: Any, intent: Intent) {
-        with (that) {
-            val extraIntent = intent.extras?.get(Intent.EXTRA_INTENT) as Intent?: return
-            val resultTo = resultToField.get(mRequest)
-            val sourceRecord =
-                this.getObject("mService")
-                    .getObject("mRootWindowContainer")
-                    .invokeMethod(
-                        "isInAnyStack",
-                        arrayOf(resultTo),
-                        arrayOf(Class.forName("android.os.IBinder"))
-                    )
-            Log.d(TAG, "resultTo=$resultTo, sourceRecord=$sourceRecord")
-            if (sourceRecord != null && sourceRecord.getObject("app") != null) {
-                callingUidField.set(
-                    mRequest,
-                    XposedHelpers.getObjectField(sourceRecord, "launchedFromUid")
-                )
-                callingPackageField.set(
-                    mRequest,
-                    XposedHelpers.getObjectField(sourceRecord, "launchedFromPackage")
-                )
-                callingFeatureIdField.set(
-                    mRequest,
-                    XposedHelpers.getObjectField(sourceRecord, "launchedFromFeatureId")
-                )
-                extraIntent.flags =
-                    extraIntent.flags or Intent.FLAG_ACTIVITY_FORWARD_RESULT or Intent.FLAG_ACTIVITY_PREVIOUS_IS_TOP
-                intentField.set(mRequest, extraIntent)
-                reasonField.set(mRequest, ACTION_FORWARD_INTENT)
-                ignoreTargetSecurityField.set(mRequest, true)
-                Log.d(TAG, "replace done: $extraIntent")
+    private fun askAndResendStartActivity(atm: Any, args: Array<Any>, userId: Int) {
+        val dialog = AlertDialog.Builder(windowContext)
+            .setPositiveButton("Direct") { _, _ ->
+                // args[1] = "android"
+                try {
+                    atm.invokeMethodAuto(
+                        "startActivityAsUser",
+                        *args, userId
+                    )?.let {
+                        Log.d(TAG, "direct startActivityAsUser result: $it")
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "failed to direct start:", e)
+                }
             }
-
-        }
+            .setNegativeButton("Replace") { _, _ ->
+                // args[1] = "android"
+                (args[3] as? Intent)?.let {
+                    it.component = null
+                    it.action = Intent.ACTION_VIEW
+                    it.extras?.getString("extra_url")?.let { url ->
+                        it.data = Uri.parse(url)
+                    }
+                }
+                try {
+                    atm.invokeMethodAuto("startActivityAsUser",
+                        *args, userId
+                    )?.let {
+                        Log.d(TAG, "replace startActivityAsUser result: $it")
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "failed to replace start:", e)
+                }
+            }
+            .setMessage("IntentForwarder").create()
+        dialog.window?.attributes?.type = WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG
+        dialog.show()
     }
 
-    // TODO: consider to hook ATMS#startActivity...
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (!(lpparam.packageName == "android" && lpparam.processName == "android")) {
             return
@@ -124,37 +120,23 @@ class HookSystem: IXposedHookLoadPackage {
 
         EzXHelperInit.initHandleLoadPackage(lpparam)
 
-        findMethod("com.android.server.wm.ActivityStarter") {
-            name == "execute"
+        findMethod(ATMS) {
+            name == "startActivity"
         }.hookBefore { param ->
-            if (!enabled) return@hookBefore
-            with(param.thisObject) {
-                val mRequest = this.getObject("mRequest")
-                val intent = intentField.get(mRequest) as Intent?
-                if (intent != null) {
-                    try {
-                        if (intent.action == ACTION_FORWARD_INTENT && checkFromModule()) {
-                            Log.w(TAG, "get intent forward request")
-                            handleForwardIntent(this, mRequest, intent)
-                            return@hookBefore
-                        }
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "failed to handle forward intent", e)
-                    }
-
-                    if (intent.component?.className == "five.ec1cff.wxdemo.WebBrowserActivity") {
-                        Log.d(TAG, "replace intent $intent")
-                        val newIntent = Intent(ACTION_REQUEST_FORWARD)
-                        newIntent.component = ComponentName("five.ec1cff.intentforwarder", "five.ec1cff.intentforwarder.IntentForwardActivity")
-                        newIntent.putExtra(Intent.EXTRA_INTENT, intent)
-                        intentField.set(mRequest, newIntent)
-                        Log.d(TAG, "to intent $newIntent")
-                    }
-                }
+            val intent = param.args[3] as? Intent?: return@hookBefore
+            if (!checkIntent(intent)) return@hookBefore
+            myHandler.post {
+                askAndResendStartActivity(
+                    param.thisObject,
+                    param.args,
+                    Binder.getCallingUid() / 100000
+                )
             }
+            param.result = 0 // ActivityManager.START_SUCCESS
         }
 
-        findMethod("com.android.server.wm.ActivityTaskManagerService") {
+        // bridge between system_server and module
+        findMethod(ATMS) {
             name == BRIDGE_METHOD
         }.hookBefore { param ->
             if (!checkFromModule(true)) return@hookBefore
