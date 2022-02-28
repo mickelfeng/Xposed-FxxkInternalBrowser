@@ -19,6 +19,8 @@ const val ATMS = "com.android.server.wm.ActivityTaskManagerService"
 class HookSystem: IXposedHookLoadPackage {
     val TAG = "IntentForwardHookSystem"
 
+    private val policies: MutableList<IntentPolicy> = ArrayList()
+
     private val systemContext: Context by lazy {
         Class.forName("android.app.ActivityThread")
             .getDeclaredMethod("currentActivityThread")
@@ -65,41 +67,63 @@ class HookSystem: IXposedHookLoadPackage {
         return result == true
     }
 
-    private fun checkIntent(intent: Intent): Boolean {
-        return intent.component?.className == "five.ec1cff.wxdemo.WebBrowserActivity"
+    private fun checkIntent(intent: Intent, pkg: String): Pair<IntentPolicy?, IntentPolicy.Action> {
+        policies.firstOrNull {
+            it.className == intent.component?.className && it.packageName == pkg
+        }?.let {
+            val url = if (it.urlExtraKey != null) {
+                (intent.extras?.get(it.urlExtraKey) as? String) ?.let {
+                    Uri.parse(it)
+                }
+            } else {
+                intent.data
+            }
+            var act = it.defaultAction
+            val host = url?.host
+            if (host != null) {
+                it.hostAction.firstNotNullOfOrNull {
+                    if (it.key.endsWith(host)) it.value
+                    else null
+                }?.let {
+                    act = it
+                }
+            }
+            return it to act
+        }
+        return null to IntentPolicy.Action.PASS
     }
 
-    private fun askAndResendStartActivity(atm: Any, args: Array<Any>, userId: Int) {
+    private fun modifyIntent(it: Intent, policy: IntentPolicy) {
+        it.component = null
+        it.action = Intent.ACTION_VIEW
+        it.extras?.getString(policy.urlExtraKey)?.let { url ->
+            it.data = Uri.parse(url)
+        }
+    }
+
+    private fun resend(self: Any, args: Array<Any>, userId: Int) {
+        try {
+            self.invokeMethodAuto(
+                "startActivityAsUser",
+                *args, userId
+            )?.let {
+                Log.d(TAG, "direct startActivityAsUser result: $it")
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "failed to direct start:", e)
+        }
+    }
+
+    private fun askAndResendStartActivity(policy: IntentPolicy, self: Any, args: Array<Any>, userId: Int) {
         val dialog = AlertDialog.Builder(systemUIContext)
             .setPositiveButton("Direct") { _, _ ->
-                try {
-                    atm.invokeMethodAuto(
-                        "startActivityAsUser",
-                        *args, userId
-                    )?.let {
-                        Log.d(TAG, "direct startActivityAsUser result: $it")
-                    }
-                } catch (e: Throwable) {
-                    Log.e(TAG, "failed to direct start:", e)
-                }
+                resend(self, args, userId)
             }
             .setNegativeButton("Replace") { _, _ ->
                 (args[3] as? Intent)?.let {
-                    it.component = null
-                    it.action = Intent.ACTION_VIEW
-                    it.extras?.getString("extra_url")?.let { url ->
-                        it.data = Uri.parse(url)
-                    }
+                    modifyIntent(it, policy)
                 }
-                try {
-                    atm.invokeMethodAuto("startActivityAsUser",
-                        *args, userId
-                    )?.let {
-                        Log.d(TAG, "replace startActivityAsUser result: $it")
-                    }
-                } catch (e: Throwable) {
-                    Log.e(TAG, "failed to replace start:", e)
-                }
+                resend(self, args, userId)
             }
             .setMessage("IntentForwarder").create()
         dialog.window?.let {
@@ -114,6 +138,15 @@ class HookSystem: IXposedHookLoadPackage {
             return
         }
 
+        val hostAction: HashMap<String, IntentPolicy.Action> = hashMapOf(
+            "weixin.com" to IntentPolicy.Action.PASS
+        )
+
+        policies.addAll(listOf(
+            IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", null, hostAction = hostAction),
+            IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", "extra_url", hostAction = hostAction)
+        ))
+
         EzXHelperInit.initHandleLoadPackage(lpparam)
 
         findMethod(ATMS) {
@@ -121,13 +154,21 @@ class HookSystem: IXposedHookLoadPackage {
         }.hookBefore { param ->
             if (!enabled) return@hookBefore
             val intent = param.args[3] as? Intent?: return@hookBefore
-            if (!checkIntent(intent)) return@hookBefore
-            myHandler.post {
-                askAndResendStartActivity(
-                    param.thisObject,
-                    param.args,
-                    Binder.getCallingUid() / 100000
-                )
+            val callingPackage = param.args[1] as? String?: return@hookBefore
+            val (policy, action) = checkIntent(intent, callingPackage)
+            if (policy == null || action == IntentPolicy.Action.PASS) return@hookBefore
+            else if (action == IntentPolicy.Action.ASK) {
+                myHandler.post {
+                    askAndResendStartActivity(
+                        policy,
+                        param.thisObject,
+                        param.args,
+                        Binder.getCallingUid() / 100000
+                    )
+                }
+            }
+            else if (action == IntentPolicy.Action.REPLACE) {
+                modifyIntent(intent, policy)
             }
             param.result = 0 // ActivityManager.START_SUCCESS
         }
