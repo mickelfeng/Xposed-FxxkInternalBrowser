@@ -5,10 +5,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Binder
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.IBinder
+import android.os.*
 import android.util.Log
 import android.view.WindowManager
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
@@ -22,35 +19,33 @@ const val ATMS = "com.android.server.wm.ActivityTaskManagerService"
 class HookSystem: IXposedHookLoadPackage {
     val TAG = "IntentForwardHookSystem"
 
-    val systemContext: Context by lazy {
+    private val systemContext: Context by lazy {
         Class.forName("android.app.ActivityThread")
             .getDeclaredMethod("currentActivityThread")
             .invoke(null)!!
             .invokeMethod("getSystemContext") as Context
     }
 
-    val systemUIContext: Context by lazy {
+    private val systemUIContext: Context by lazy {
         Class.forName("android.app.ActivityThread")
             .getDeclaredMethod("currentActivityThread")
             .invoke(null)!!
             .invokeMethod("getSystemUiContext") as Context
     }
 
-    val windowContext: Context by lazy {
-        systemUIContext.createWindowContext(
-            WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG, null
-        )
+    private val windowToken: IBinder by lazy {
+        Binder()
     }
 
-    val myHandler: Handler by lazy {
+    private val myHandler: Handler by lazy {
         val thread = HandlerThread("IntentForwarder")
         thread.start()
         Handler(thread.looper)
     }
 
-    var enabled = true
+    private var enabled = true
 
-    val controller = object: IController.Stub() {
+    private val controller = object: IController.Stub() {
         override fun getState(): Boolean {
             return enabled
         }
@@ -75,9 +70,8 @@ class HookSystem: IXposedHookLoadPackage {
     }
 
     private fun askAndResendStartActivity(atm: Any, args: Array<Any>, userId: Int) {
-        val dialog = AlertDialog.Builder(windowContext)
+        val dialog = AlertDialog.Builder(systemUIContext)
             .setPositiveButton("Direct") { _, _ ->
-                // args[1] = "android"
                 try {
                     atm.invokeMethodAuto(
                         "startActivityAsUser",
@@ -90,7 +84,6 @@ class HookSystem: IXposedHookLoadPackage {
                 }
             }
             .setNegativeButton("Replace") { _, _ ->
-                // args[1] = "android"
                 (args[3] as? Intent)?.let {
                     it.component = null
                     it.action = Intent.ACTION_VIEW
@@ -109,7 +102,10 @@ class HookSystem: IXposedHookLoadPackage {
                 }
             }
             .setMessage("IntentForwarder").create()
-        dialog.window?.attributes?.type = WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG
+        dialog.window?.let {
+            it.attributes?.type = WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG
+            it.attributes.token = windowToken
+        }
         dialog.show()
     }
 
@@ -123,6 +119,7 @@ class HookSystem: IXposedHookLoadPackage {
         findMethod(ATMS) {
             name == "startActivity"
         }.hookBefore { param ->
+            if (!enabled) return@hookBefore
             val intent = param.args[3] as? Intent?: return@hookBefore
             if (!checkIntent(intent)) return@hookBefore
             myHandler.post {
