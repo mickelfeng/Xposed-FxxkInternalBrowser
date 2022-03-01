@@ -1,6 +1,7 @@
 plugins {
     id ("com.android.application")
     id ("org.jetbrains.kotlin.android")
+    id("kotlin-parcelize")
 }
 
 android {
@@ -30,6 +31,7 @@ dependencies {
     compileOnly ("de.robv.android.xposed:api:82")
     compileOnly ("de.robv.android.xposed:api:82:sources")
     implementation ("com.github.kyuubiran:EzXHelper:0.6.3")
+    implementation ("com.google.code.gson:gson:2.9.0")
 
     implementation ("androidx.core:core-ktx:1.7.0")
     implementation ("androidx.appcompat:appcompat:1.4.1")

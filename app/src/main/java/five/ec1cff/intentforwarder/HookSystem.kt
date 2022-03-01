@@ -2,24 +2,30 @@ package five.ec1cff.intentforwarder
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.*
 import android.util.Log
 import android.view.WindowManager
+import android.widget.CheckBox
 import com.github.kyuubiran.ezxhelper.init.EzXHelperInit
 import com.github.kyuubiran.ezxhelper.utils.*
+import com.google.gson.Gson
 import de.robv.android.xposed.IXposedHookLoadPackage
+import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import java.io.File
 
 const val ATMS = "com.android.server.wm.ActivityTaskManagerService"
+const val CONFIG_PATH = "/data/system/intentfw.json"
+
+data class State(val enabled: Boolean, val ip: MutableList<IntentPolicy>, val hp: MutableList<HostPolicy>)
 
 @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
 class HookSystem: IXposedHookLoadPackage {
     val TAG = "IntentForwardHookSystem"
-
-    private val policies: MutableList<IntentPolicy> = ArrayList()
 
     private val systemContext: Context by lazy {
         Class.forName("android.app.ActivityThread")
@@ -55,6 +61,47 @@ class HookSystem: IXposedHookLoadPackage {
         override fun setState(isEnabled: Boolean) {
             enabled = isEnabled
         }
+
+        override fun dumpService(): String {
+            val dumpStr = "enabled=$enabled\nIntentPolicies(${intentPolicies.size})=$intentPolicies\nHostPolicies(${hostPolicies.size})=$hostPolicies"
+            Log.d(TAG, dumpStr)
+            return dumpStr
+        }
+
+        override fun dumpJson() {
+            dumpToJson()
+        }
+
+        override fun loadJson() {
+            loadFromJson()
+        }
+    }
+
+    private fun dumpToJson() {
+        try {
+            File(CONFIG_PATH).bufferedWriter().use {
+                it.write(
+                    Gson().toJson(State(enabled, intentPolicies, hostPolicies))
+                )
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "failed to dump json", e)
+        }
+    }
+
+    private fun loadFromJson() {
+        try {
+            File(CONFIG_PATH).bufferedReader().use {
+                val state = Gson().fromJson(it.readText(), State::class.java)
+                enabled = state.enabled
+                intentPolicies.clear()
+                intentPolicies.addAll(state.ip)
+                hostPolicies.clear()
+                hostPolicies.addAll(state.hp)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "failed to load from json", e)
+        }
     }
 
     private fun checkFromModule(withRoot: Boolean = false): Boolean {
@@ -67,30 +114,30 @@ class HookSystem: IXposedHookLoadPackage {
         return result == true
     }
 
-    private fun checkIntent(intent: Intent, pkg: String): Pair<IntentPolicy?, IntentPolicy.Action> {
-        policies.firstOrNull {
-            it.className == intent.component?.className && it.packageName == pkg
-        }?.let {
-            val url = if (it.urlExtraKey != null) {
-                (intent.extras?.get(it.urlExtraKey) as? String) ?.let {
+    private fun checkIntent(intent: Intent, pkg: String): Triple<IntentPolicy.Action, IntentPolicy?, Uri?> {
+        intentPolicies.firstOrNull { policy ->
+            if (!policy.enabled || !(policy.className == intent.component?.className && policy.packageName == pkg))
+                return@firstOrNull false
+            val url = if (policy.urlExtraKey != null) {
+                (intent.extras?.get(policy.urlExtraKey) as? String) ?.let {
                     Uri.parse(it)
                 }
             } else {
                 intent.data
             }
-            var act = it.defaultAction
-            val host = url?.host
+            if (url == null) return@firstOrNull false
+            var act = policy.defaultAction
+            val host = url.host
             if (host != null) {
-                it.hostAction.firstNotNullOfOrNull {
-                    if (it.key.endsWith(host)) it.value
-                    else null
-                }?.let {
-                    act = it
+                matchHostPolicy(host, pkg)?.let {
+                    Log.d(TAG, "$host match host policy $it")
+                    act = it.action
                 }
             }
-            return it to act
+            Log.d(TAG, "${policy.urlExtraKey} $act, $policy, $url")
+            return Triple(act, policy, url)
         }
-        return null to IntentPolicy.Action.PASS
+        return Triple(IntentPolicy.Action.PASS, null, null)
     }
 
     private fun modifyIntent(it: Intent, policy: IntentPolicy) {
@@ -110,22 +157,49 @@ class HookSystem: IXposedHookLoadPackage {
                 Log.d(TAG, "direct startActivityAsUser result: $it")
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "failed to direct start:", e)
+            Log.e(TAG, "failed to resend:", e)
         }
     }
 
-    private fun askAndResendStartActivity(policy: IntentPolicy, self: Any, args: Array<Any>, userId: Int) {
-        val dialog = AlertDialog.Builder(systemUIContext)
+    @SuppressLint("SetTextI18n")
+    private fun askUser(uri: Uri, policy: IntentPolicy, param: XC_MethodHook.MethodHookParam, userId: Int) {
+        var remember = false
+        val context = systemUIContext
+        val rememberCheckBox = CheckBox(context)
+        rememberCheckBox.setOnCheckedChangeListener { _, checked ->
+            remember = checked
+        }
+        val intentToSend = param.args[3] as Intent
+        rememberCheckBox.text = "Remember my choice for ${uri.host}"
+        fun onUserChoose(shouldModify: Boolean) {
+            if (remember) {
+                val act = if (shouldModify) IntentPolicy.Action.REPLACE
+                    else IntentPolicy.Action.PASS
+                val p = hostPolicies.find {
+                    it.hostName == uri.host && it.pkg == intentToSend.component!!.packageName
+                }
+                if (p != null) {
+                    p.action = act
+                } else {
+                    hostPolicies.add(0, HostPolicy(uri.host!!, intentToSend.component!!.packageName, act))
+                }
+                dumpToJson()
+            }
+            if (shouldModify) {
+                modifyIntent(intentToSend, policy)
+            }
+            resend(param.thisObject, param.args, userId)
+        }
+        val dialog = AlertDialog.Builder(context)
+            .setView(rememberCheckBox)
             .setPositiveButton("Direct") { _, _ ->
-                resend(self, args, userId)
+                onUserChoose(false)
             }
             .setNegativeButton("Replace") { _, _ ->
-                (args[3] as? Intent)?.let {
-                    modifyIntent(it, policy)
-                }
-                resend(self, args, userId)
+                onUserChoose(true)
             }
-            .setMessage("IntentForwarder").create()
+            .setMessage("An internal browser wants to open $uri")
+            .create()
         dialog.window?.let {
             it.attributes?.type = WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG
             it.attributes.token = windowToken
@@ -138,14 +212,28 @@ class HookSystem: IXposedHookLoadPackage {
             return
         }
 
-        val hostAction: HashMap<String, IntentPolicy.Action> = hashMapOf(
-            "weixin.com" to IntentPolicy.Action.PASS
-        )
+        if (File(CONFIG_PATH).isFile) {
+            loadFromJson()
+        } else {
+            hostPolicies.addAll(listOf(
+                HostPolicy("weixin.com", "five.ec1cff.wxdemo", IntentPolicy.Action.PASS),
+                HostPolicy(".qq.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
+                HostPolicy(".qq.com", "com.tencent.mm", IntentPolicy.Action.PASS),
+                HostPolicy(".tenpay.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
+                HostPolicy(".bilibili.com", "tv.danmaku.bili", IntentPolicy.Action.PASS),
+                HostPolicy("b23.tv", "tv.danmaku.bili", IntentPolicy.Action.PASS)
+            ))
 
-        policies.addAll(listOf(
-            IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", null, hostAction = hostAction),
-            IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", "extra_url", hostAction = hostAction)
-        ))
+            intentPolicies.addAll(listOf(
+                IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", null),
+                IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", "extra_url"),
+                IntentPolicy("com.tencent.mobileqq", "com.tencent.mobileqq.activity.QQBrowserDelegationActivity", "url"),
+                // IntentPolicy("com.tencent.mm", "com.tencent.mm.ui.LauncherUI", "rawUrl"),
+                IntentPolicy("com.tencent.mm", "com.tencent.mm.plugin.webview.ui.tools.WebviewMpUI", "rawUrl"),
+                IntentPolicy("tv.danmaku.bili", "tv.danmaku.bili.ui.webview.MWebActivity", null)
+            ))
+            dumpToJson()
+        }
 
         EzXHelperInit.initHandleLoadPackage(lpparam)
 
@@ -155,20 +243,21 @@ class HookSystem: IXposedHookLoadPackage {
             if (!enabled) return@hookBefore
             val intent = param.args[3] as? Intent?: return@hookBefore
             val callingPackage = param.args[1] as? String?: return@hookBefore
-            val (policy, action) = checkIntent(intent, callingPackage)
-            if (policy == null || action == IntentPolicy.Action.PASS) return@hookBefore
+            val (action, policy, uri) = checkIntent(intent, callingPackage)
+            if (policy == null || uri == null || action == IntentPolicy.Action.PASS) return@hookBefore
             else if (action == IntentPolicy.Action.ASK) {
                 myHandler.post {
-                    askAndResendStartActivity(
+                    askUser(
+                        uri,
                         policy,
-                        param.thisObject,
-                        param.args,
+                        param,
                         Binder.getCallingUid() / 100000
                     )
                 }
             }
             else if (action == IntentPolicy.Action.REPLACE) {
                 modifyIntent(intent, policy)
+                return@hookBefore
             }
             param.result = 0 // ActivityManager.START_SUCCESS
         }

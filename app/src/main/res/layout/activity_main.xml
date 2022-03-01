@@ -35,4 +35,34 @@
         android:text="refresh"
         app:layout_constraintStart_toEndOf="@+id/opButton"
         app:layout_constraintTop_toBottomOf="@+id/state" />
+
+    <Button
+        android:id="@+id/dumpButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="24dp"
+        android:text="DUMP"
+        app:layout_constraintStart_toEndOf="@+id/refreshButton"
+        app:layout_constraintTop_toBottomOf="@+id/state" />
+
+    <Button
+        android:id="@+id/dumpJsonButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="24dp"
+        android:text="dump json"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/opButton" />
+
+    <Button
+        android:id="@+id/loadJsonButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginTop="24dp"
+        android:text="load json"
+        app:layout_constraintStart_toEndOf="@+id/dumpJsonButton"
+        app:layout_constraintTop_toBottomOf="@+id/refreshButton" />
 </androidx.constraintlayout.widget.ConstraintLayout>

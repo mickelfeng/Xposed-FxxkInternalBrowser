@@ -1,10 +1,13 @@
 package five.ec1cff.intentforwarder
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 
 class MainActivity : AppCompatActivity() {
     @SuppressLint("SetTextI18n")
@@ -33,6 +36,26 @@ class MainActivity : AppCompatActivity() {
         val refreshButton = findViewById<Button>(R.id.refreshButton)
         refreshButton.setOnClickListener { updateView() }
         updateView()
+        findViewById<Button>(R.id.dumpButton).setOnClickListener {
+            MyApplication.controller?.let {
+                val s = it.dumpService()
+                AlertDialog.Builder(this).setMessage(s)
+                    .setPositiveButton("copy") { _, _ ->
+                        getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                            ClipData.newPlainText("", s)
+                        )
+                    }
+                    .show()
+            }
+        }
+
+        findViewById<Button>(R.id.dumpJsonButton).setOnClickListener {
+            MyApplication.controller?.dumpJson()
+        }
+
+        findViewById<Button>(R.id.loadJsonButton).setOnClickListener {
+            MyApplication.controller?.loadJson()
+        }
     }
 
     override fun onResume() {
