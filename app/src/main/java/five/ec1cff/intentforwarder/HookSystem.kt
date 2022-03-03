@@ -84,6 +84,7 @@ class HookSystem: IXposedHookLoadPackage {
                     Gson().toJson(State(enabled, intentPolicies, hostPolicies))
                 )
             }
+            Log.d(TAG, "dump to json")
         } catch (e: Throwable) {
             Log.e(TAG, "failed to dump json", e)
         }
@@ -99,6 +100,7 @@ class HookSystem: IXposedHookLoadPackage {
                 hostPolicies.clear()
                 hostPolicies.addAll(state.hp)
             }
+            Log.d(TAG, "load from json")
         } catch (e: Throwable) {
             Log.e(TAG, "failed to load from json", e)
         }
@@ -115,16 +117,22 @@ class HookSystem: IXposedHookLoadPackage {
     }
 
     private fun checkIntent(intent: Intent, pkg: String): Triple<IntentPolicy.Action, IntentPolicy?, Uri?> {
+        Log.d(TAG, "check intent $intent")
         intentPolicies.firstOrNull { policy ->
             if (!policy.enabled || !(policy.className == intent.component?.className && policy.packageName == pkg))
                 return@firstOrNull false
             val url = if (policy.urlExtraKey != null) {
-                (intent.extras?.get(policy.urlExtraKey) as? String) ?.let {
-                    Uri.parse(it)
-                }
+                val p = Parcel.obtain()
+                intent.extras?.writeToParcel(p, 0)
+                val bytes = p.marshall()
+                p.recycle()
+                bytes.searchKeyAndValue(policy.urlExtraKey) {
+                    it.startsWith("http")
+                }?.let { Uri.parse(it) }
             } else {
                 intent.data
             }
+            Log.d(TAG, "found policy $policy for ($url) $intent")
             if (url == null) return@firstOrNull false
             var act = policy.defaultAction
             val host = url.host
@@ -140,12 +148,11 @@ class HookSystem: IXposedHookLoadPackage {
         return Triple(IntentPolicy.Action.PASS, null, null)
     }
 
-    private fun modifyIntent(it: Intent, policy: IntentPolicy) {
-        it.component = null
-        it.action = Intent.ACTION_VIEW
-        it.extras?.getString(policy.urlExtraKey)?.let { url ->
-            it.data = Uri.parse(url)
-        }
+    private fun modifyIntent(uri: Uri, param: XC_MethodHook.MethodHookParam) {
+        val intentToSend = param.args[3] as Intent
+        val newIntent = Intent(Intent.ACTION_VIEW, uri)
+        newIntent.flags = intentToSend.flags
+        param.args[3] = newIntent
     }
 
     private fun resend(self: Any, args: Array<Any>, userId: Int) {
@@ -186,7 +193,7 @@ class HookSystem: IXposedHookLoadPackage {
                 dumpToJson()
             }
             if (shouldModify) {
-                modifyIntent(intentToSend, policy)
+                modifyIntent(uri, param)
             }
             resend(param.thisObject, param.args, userId)
         }
@@ -256,7 +263,7 @@ class HookSystem: IXposedHookLoadPackage {
                 }
             }
             else if (action == IntentPolicy.Action.REPLACE) {
-                modifyIntent(intent, policy)
+                modifyIntent(uri, param)
                 return@hookBefore
             }
             param.result = 0 // ActivityManager.START_SUCCESS
