@@ -2,7 +2,6 @@ package five.ec1cff.intentforwarder
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -21,10 +20,14 @@ import java.io.File
 const val ATMS = "com.android.server.wm.ActivityTaskManagerService"
 const val CONFIG_PATH = "/data/system/intentfw.json"
 
-data class State(val enabled: Boolean, val ip: MutableList<IntentPolicy>, val hp: MutableList<HostPolicy>)
+data class State(
+    val enabled: Boolean,
+    val ip: MutableList<IntentPolicy>,
+    val hp: MutableList<HostPolicy>
+)
 
 @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
-class HookSystem: IXposedHookLoadPackage {
+class HookSystem : IXposedHookLoadPackage {
     val TAG = "IntentForwardHookSystem"
 
     private val systemContext: Context by lazy {
@@ -53,7 +56,7 @@ class HookSystem: IXposedHookLoadPackage {
 
     private var enabled = true
 
-    private val controller = object: IController.Stub() {
+    private val controller = object : IController.Stub() {
         override fun getState(): Boolean {
             return enabled
         }
@@ -63,7 +66,8 @@ class HookSystem: IXposedHookLoadPackage {
         }
 
         override fun dumpService(): String {
-            val dumpStr = "enabled=$enabled\nIntentPolicies(${intentPolicies.size})=$intentPolicies\nHostPolicies(${hostPolicies.size})=$hostPolicies"
+            val dumpStr =
+                "enabled=$enabled\nIntentPolicies(${intentPolicies.size})=$intentPolicies\nHostPolicies(${hostPolicies.size})=$hostPolicies"
             Log.d(TAG, dumpStr)
             return dumpStr
         }
@@ -116,7 +120,10 @@ class HookSystem: IXposedHookLoadPackage {
         return result == true
     }
 
-    private fun checkIntent(intent: Intent, pkg: String): Triple<IntentPolicy.Action, IntentPolicy?, Uri?> {
+    private fun checkIntent(
+        intent: Intent,
+        pkg: String
+    ): Triple<IntentPolicy.Action, IntentPolicy?, Uri?> {
         Log.d(TAG, "check intent $intent")
         intentPolicies.firstOrNull { policy ->
             if (!policy.enabled || !(policy.className == intent.component?.className && policy.packageName == pkg))
@@ -169,7 +176,12 @@ class HookSystem: IXposedHookLoadPackage {
     }
 
     @SuppressLint("SetTextI18n")
-    private fun askUser(uri: Uri, policy: IntentPolicy, param: XC_MethodHook.MethodHookParam, userId: Int) {
+    private fun askUser(
+        uri: Uri,
+        policy: IntentPolicy,
+        param: XC_MethodHook.MethodHookParam,
+        userId: Int
+    ) {
         var remember = false
         val context = systemUIContext
         val rememberCheckBox = CheckBox(context)
@@ -181,14 +193,17 @@ class HookSystem: IXposedHookLoadPackage {
         fun onUserChoose(shouldModify: Boolean) {
             if (remember) {
                 val act = if (shouldModify) IntentPolicy.Action.REPLACE
-                    else IntentPolicy.Action.PASS
+                else IntentPolicy.Action.PASS
                 val p = hostPolicies.find {
                     it.hostName == uri.host && it.pkg == intentToSend.component!!.packageName
                 }
                 if (p != null) {
                     p.action = act
                 } else {
-                    hostPolicies.add(0, HostPolicy(uri.host!!, intentToSend.component!!.packageName, act))
+                    hostPolicies.add(
+                        0,
+                        HostPolicy(uri.host!!, intentToSend.component!!.packageName, act)
+                    )
                 }
                 dumpToJson()
             }
@@ -197,6 +212,7 @@ class HookSystem: IXposedHookLoadPackage {
             }
             resend(param.thisObject, param.args, userId)
         }
+
         val dialog = AlertDialog.Builder(context)
             .setView(rememberCheckBox)
             .setPositiveButton("Direct") { _, _ ->
@@ -222,23 +238,43 @@ class HookSystem: IXposedHookLoadPackage {
         if (File(CONFIG_PATH).isFile) {
             loadFromJson()
         } else {
-            hostPolicies.addAll(listOf(
-                HostPolicy("weixin.com", "five.ec1cff.wxdemo", IntentPolicy.Action.PASS),
-                HostPolicy(".qq.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
-                HostPolicy(".qq.com", "com.tencent.mm", IntentPolicy.Action.PASS),
-                HostPolicy(".tenpay.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
-                HostPolicy(".bilibili.com", "tv.danmaku.bili", IntentPolicy.Action.PASS),
-                HostPolicy("b23.tv", "tv.danmaku.bili", IntentPolicy.Action.PASS)
-            ))
+            hostPolicies.addAll(
+                listOf(
+                    HostPolicy("weixin.com", "five.ec1cff.wxdemo", IntentPolicy.Action.PASS),
+                    HostPolicy(".qq.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
+                    HostPolicy(".qq.com", "com.tencent.mm", IntentPolicy.Action.PASS),
+                    HostPolicy(".tenpay.com", "com.tencent.mobileqq", IntentPolicy.Action.PASS),
+                    HostPolicy(".bilibili.com", "tv.danmaku.bili", IntentPolicy.Action.PASS),
+                    HostPolicy("b23.tv", "tv.danmaku.bili", IntentPolicy.Action.PASS)
+                )
+            )
 
-            intentPolicies.addAll(listOf(
-                IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", null),
-                IntentPolicy("five.ec1cff.wxdemo", "five.ec1cff.wxdemo.WebBrowserActivity", "extra_url"),
-                IntentPolicy("com.tencent.mobileqq", "com.tencent.mobileqq.activity.QQBrowserDelegationActivity", "url"),
-                // IntentPolicy("com.tencent.mm", "com.tencent.mm.ui.LauncherUI", "rawUrl"),
-                IntentPolicy("com.tencent.mm", "com.tencent.mm.plugin.webview.ui.tools.WebviewMpUI", "rawUrl"),
-                IntentPolicy("tv.danmaku.bili", "tv.danmaku.bili.ui.webview.MWebActivity", null)
-            ))
+            intentPolicies.addAll(
+                listOf(
+                    IntentPolicy(
+                        "five.ec1cff.wxdemo",
+                        "five.ec1cff.wxdemo.WebBrowserActivity",
+                        null
+                    ),
+                    IntentPolicy(
+                        "five.ec1cff.wxdemo",
+                        "five.ec1cff.wxdemo.WebBrowserActivity",
+                        "extra_url"
+                    ),
+                    IntentPolicy(
+                        "com.tencent.mobileqq",
+                        "com.tencent.mobileqq.activity.QQBrowserDelegationActivity",
+                        "url"
+                    ),
+                    // IntentPolicy("com.tencent.mm", "com.tencent.mm.ui.LauncherUI", "rawUrl"),
+                    IntentPolicy(
+                        "com.tencent.mm",
+                        "com.tencent.mm.plugin.webview.ui.tools.WebviewMpUI",
+                        "rawUrl"
+                    ),
+                    IntentPolicy("tv.danmaku.bili", "tv.danmaku.bili.ui.webview.MWebActivity", null)
+                )
+            )
             dumpToJson()
         }
 
@@ -248,8 +284,8 @@ class HookSystem: IXposedHookLoadPackage {
             name == "startActivity"
         }.hookBefore { param ->
             if (!enabled) return@hookBefore
-            val intent = param.args[3] as? Intent?: return@hookBefore
-            val callingPackage = param.args[1] as? String?: return@hookBefore
+            val intent = param.args[3] as? Intent ?: return@hookBefore
+            val callingPackage = param.args[1] as? String ?: return@hookBefore
             val (action, policy, uri) = checkIntent(intent, callingPackage)
             if (policy == null || uri == null || action == IntentPolicy.Action.PASS) return@hookBefore
             else if (action == IntentPolicy.Action.ASK) {
@@ -261,8 +297,7 @@ class HookSystem: IXposedHookLoadPackage {
                         Binder.getCallingUid() / 100000
                     )
                 }
-            }
-            else if (action == IntentPolicy.Action.REPLACE) {
+            } else if (action == IntentPolicy.Action.REPLACE) {
                 modifyIntent(uri, param)
                 return@hookBefore
             }
@@ -274,7 +309,7 @@ class HookSystem: IXposedHookLoadPackage {
             name == BRIDGE_METHOD
         }.hookBefore { param ->
             if (!checkFromModule(true)) return@hookBefore
-            val binder = param.args[0] as IBinder?: return@hookBefore
+            val binder = param.args[0] as IBinder ?: return@hookBefore
             if (binder.interfaceDescriptor == GET_CONTROLLER_TOKEN) {
                 param.result = controller
             }

@@ -10,7 +10,7 @@ data class IntentPolicy(
     val urlExtraKey: String?,
     val defaultAction: Action = Action.ASK,
     var enabled: Boolean = true
-    ): Parcelable {
+) : Parcelable {
     enum class Action {
         PASS, REPLACE, ASK
     }
@@ -21,7 +21,7 @@ data class HostPolicy(
     val hostName: String,
     val pkg: String,
     var action: IntentPolicy.Action
-): Parcelable
+) : Parcelable
 
 val intentPolicies: MutableList<IntentPolicy> by lazy {
     ArrayList()

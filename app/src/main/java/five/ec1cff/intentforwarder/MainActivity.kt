@@ -19,7 +19,7 @@ class MainActivity : AppCompatActivity() {
             opButton.isEnabled = false
         } else {
             opButton.isEnabled = true
-            val controller: IController = MyApplication.controller?:return
+            val controller: IController = MyApplication.controller ?: return
             val state = controller.state
             stateView.text = if (state) "enabled" else "disabled"
             opButton.text = if (state) "disable" else "enable"

@@ -10,8 +10,9 @@ import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
-class HookSelf: IXposedHookLoadPackage {
+class HookSelf : IXposedHookLoadPackage {
     val TAG = "IntentForwardHookSelf"
+
     @SuppressLint("PrivateApi")
     fun requestController(): IBinder? {
         try {
@@ -33,7 +34,8 @@ class HookSelf: IXposedHookLoadPackage {
         if (lpparam.packageName != BuildConfig.APPLICATION_ID) return
         Log.d(TAG, "hook self")
 
-        XposedHelpers.findClass(MyApplication::class.java.name, lpparam.classLoader).getDeclaredField("binder").also {
+        XposedHelpers.findClass(MyApplication::class.java.name, lpparam.classLoader)
+            .getDeclaredField("binder").also {
             Log.d(TAG, it.toString())
             it.isAccessible = true
         }.set(null, requestController())
