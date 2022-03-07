@@ -49,11 +49,16 @@ fun ByteArray.hexDump(): String {
 
 fun ByteArray.searchKeyAndValue(key: String, cond: (String) -> Boolean): String? {
     Log.d("IntentForwardParcelableHelper", "search $key in ${this.size} bytes ${this.hexDump()}")
+    val realLen = (key.length + 1) * 2
+    // frameworks/native/libs/binder/Parcel.cpp: writeString16
+    val padLen = (realLen + 3) and -4
+    Log.d("IntentForwardParcelableHelper", "realLen=$realLen, padLen=$padLen")
+    if (padLen < 0) return null
     val target =
-        ByteBuffer.allocate(4 + key.length * 2 + 2 + 4).order(ByteOrder.LITTLE_ENDIAN).let {
+        ByteBuffer.allocate(4 + padLen + 4).order(ByteOrder.LITTLE_ENDIAN).let {
             it.putInt(key.length)
             key.forEach { ch -> it.putChar(ch) }
-            it.putChar('\u0000')
+            it.position(4 + padLen)
             it.putInt(VAL_STRING)
             it.array()
         }
