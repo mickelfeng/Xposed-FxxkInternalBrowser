@@ -1,3 +1,7 @@
+# 弃坑
+
+发现前人其实有了更好的实现→[InternalBrowserRedirect](https://github.com/yujincheng08/Zygisk-InternalBrowserRedirect)，于是本项目弃坑。
+
 # 说明
 
 **警告：本模块处于开发阶段，仅在 Android 11 上通过测试，功能尚不完整，建议不要使用**
